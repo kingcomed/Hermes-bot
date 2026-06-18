@@ -1,97 +1,139 @@
-from flask import Flask, request
-import requests
 import os
+import requests
 import smtplib
 from email.mime.text import MIMEText
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import PlainTextResponse
 
-app = Flask(__name__)
+app = FastAPI()
 
-# --- ENVIRONMENT VARIABLES ---
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN')
-PHONE_NUMBER_ID = os.environ.get('PHONE_NUMBER_ID')
-VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'HERMES_VERIFY_TOKEN')
-EMAIL_USER = os.environ.get('EMAIL_USER')
-EMAIL_PASS = os.environ.get('EMAIL_PASS')
-VODA_NUMBER = os.environ.get('VODA_NUMBER')
+# TOKENS ZOTE
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
 
-@app.route("/")
-def home():
-    return "Hermes Bot iko Live ❤️ Telegram + WhatsApp + SMS"
+# 1. FUNCTION YA AI - INATUMIKA KILA MAHALI
+def ask_ai(user_message: str, platform: str = "telegram"):
+    """AI moja kwa app zote"""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
 
-@app.route("/health")
-def health():
-    return {"status": "ok"}
+    system_msg = {
+        "telegram": "Wewe ni Hermes Bot wa Telegram. Jibu kwa Kiswahili cha mtaani, mcheshi na mfupi.",
+        "whatsapp": "Wewe ni Hermes Bot wa WhatsApp. Jibu kwa Kiswahili rasmi kidogo, mfupi na wazi.",
+        "email": "Wewe ni Hermes AI. Jibu barua kwa Kiswahili fasaha na kitaalamu.",
+        "api": "Jibu moja kwa moja bila salamu."
+    }
 
-@app.route("/telegram", methods=['POST'])
-def telegram_webhook():
-    if not TELEGRAM_TOKEN:
-        return {"error": "TELEGRAM_TOKEN haijawekwa"}, 400
-
-    data = request.get_json()
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-        reply = f"Telegram: Umesema '{text}'\n\nHermes Bot iko Live mkuu! 🚀"
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": reply}
-        )
-    return {"ok": True}
-
-@app.route("/whatsapp", methods=['GET', 'POST'])
-def whatsapp_webhook():
-    if request.method == 'GET':
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
-        return "Verification failed", 403
-
-    if request.method == 'POST':
-        if not all([WHATSAPP_TOKEN, PHONE_NUMBER_ID]):
-            return {"error": "WHATSAPP_TOKEN au PHONE_NUMBER_ID haijawekwa"}, 400
-
-        data = request.get_json()
-        try:
-            phone = data['entry'][0]['changes'][0]['value']['messages'][0]['from']
-            text = data['entry'][0]['changes'][0]['value']['messages'][0]['text']['body']
-            reply = f"WhatsApp: Umesema '{text}'\n\nHermes Bot iko Live mkuu! 🚀"
-            requests.post(
-                f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
-                json={
-                    "messaging_product": "whatsapp",
-                    "to": phone,
-                    "text": {"body": reply}
-                }
-            )
-        except Exception as e:
-            print(f"WhatsApp Error: {e}")
-        return {"status": "ok"}, 200
-
-@app.route("/sms", methods=['POST'])
-def send_sms():
-    data = request.get_json()
-    message = data.get("message", "Hermes Bot Test")
-
-    if not all([EMAIL_USER, EMAIL_PASS, VODA_NUMBER]):
-        return {"error": "EMAIL_USER, EMAIL_PASS au VODA_NUMBER haijawekwa"}, 400
-
-    voda_email = f"{VODA_NUMBER}@sms.vodacom.co.tz"
-    msg = MIMEText(message)
-    msg['Subject'] = ""
-    msg['From'] = EMAIL_USER
-    msg['To'] = voda_email
+    data = {
+        "model": "llama-3.1-70b-versatile",
+        "messages": [
+            {"role": "system", "content": system_msg.get(platform, system_msg["api"])},
+            {"role": "user", "content": user_message}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 300
+    }
 
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
-            smtp.send_message(msg)
-        return {"status": f"SMS imetumwa kwenda {VODA_NUMBER}"}
-    except Exception as e:
-        return {"error": str(e)}, 500
+        response = requests.post(url, headers=headers, json=data, timeout=15)
+        return response.json()["choices"][0]["message"]["content"]
+    except:
+        return "Samahani, nimechoka kidogo. Jaribu tena baadae."
 
-if __name__ == "__main__":
-    app.run()
+# 2. SEND FUNCTIONS - KILA PLATFORM
+def send_telegram(chat_id, text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": chat_id, "text": text})
+
+def send_whatsapp(to_number, text):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "text": {"body": text}
+    }
+    requests.post(url, headers=headers, json=data)
+
+def send_email(to_email, subject, body):
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = EMAIL_USER
+    msg['To'] = to_email
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(EMAIL_USER, EMAIL_PASS)
+        smtp.send_message(msg)
+
+# 3. HOME ROUTE
+@app.get("/")
+def home():
+    return {"status": "Hermes Bot: Telegram + WhatsApp + Email + API Live"}
+
+# 4. TELEGRAM WEBHOOK
+@app.post("/telegram")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        user_text = data["message"].get("text", "")
+
+        if user_text == "/start":
+            reply = "Mambo mkuu! Mimi ni Hermes AI 🚀 Niulize chochote."
+        else:
+            reply = ask_ai(user_text, "telegram")
+
+        send_telegram(chat_id, reply)
+    return {"ok": True}
+
+# 5. WHATSAPP WEBHOOK
+@app.get("/whatsapp")
+async def whatsapp_verify(request: Request):
+    """Meta inatumia hii ku-verify webhook"""
+    if request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
+        return PlainTextResponse(request.query_params.get("hub.challenge"))
+    raise HTTPException(status_code=403, detail="Token mbaya")
+
+@app.post("/whatsapp")
+async def whatsapp_webhook(request: Request):
+    data = await request.json()
+    try:
+        entry = data["entry"][0]["changes"][0]["value"]
+        if "messages" in entry:
+            msg = entry["messages"][0]
+            from_number = msg["from"]
+            user_text = msg["text"]["body"]
+
+            reply = ask_ai(user_text, "whatsapp")
+            send_whatsapp(from_number, reply)
+    except:
+        pass
+    return {"ok": True}
+
+# 6. EMAIL ENDPOINT - TUMA EMAIL KWA API
+@app.post("/send-email")
+async def api_send_email(request: Request):
+    data = await request.json()
+    to = data.get("to")
+    subject = data.get("subject")
+    prompt = data.get("prompt") # AI atatunga body
+
+    if not all([to, subject, prompt]):
+        raise HTTPException(status_code=400, detail="Hakikisha 'to', 'subject', 'prompt' zipo")
+
+    body = ask_ai(prompt, "email")
+    send_email(to, subject, body)
+    return {"status": f"Email imetumwa kwa {to}"}
+
+# 7. GENERIC API - KWA APP YOYOTE
+@app.post("/api/ask")
+async def generic_api(request: Request):
+    data = await request.json()
+    question = data.get("question", "")
+    reply = ask_ai(question, "api")
+    return {"question": question, "answer": reply}
